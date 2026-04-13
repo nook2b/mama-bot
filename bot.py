@@ -36,7 +36,8 @@ OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 MAMA_CHAT_ID = int(os.environ.get("MAMA_CHAT_ID", "1219919762"))
 VANYA_CHAT_ID = int(os.environ.get("VANYA_CHAT_ID", "411340432"))
 ALLOWED_USERS = {MAMA_CHAT_ID, VANYA_CHAT_ID}
-GOOGLE_FOLDER_ID = os.environ.get("GOOGLE_FOLDER_ID", "")
+GOOGLE_AUDIO_FOLDER_ID = os.environ.get("GOOGLE_AUDIO_FOLDER_ID", "")
+GOOGLE_TEXT_FOLDER_ID = os.environ.get("GOOGLE_TEXT_FOLDER_ID", "")
 
 # Google OAuth credentials (JSON строка из переменной окружения)
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
@@ -248,7 +249,7 @@ async def save_answer(state: dict, question_idx: int):
         upload_text_to_drive(
             text=f"Вопрос: {question_text}\n\nОтвет:\n{full_text}",
             filename=text_filename,
-            folder_id=GOOGLE_FOLDER_ID or None,
+            folder_id=GOOGLE_TEXT_FOLDER_ID or None,
         )
     except Exception as e:
         logger.error(f"Failed to upload text to Drive: {e}")
@@ -262,7 +263,7 @@ async def save_answer(state: dict, question_idx: int):
                 file_path=voice_path,
                 filename=audio_filename,
                 mime_type="audio/ogg",
-                folder_id=GOOGLE_FOLDER_ID or None,
+                folder_id=GOOGLE_AUDIO_FOLDER_ID or None,
             )
         except Exception as e:
             logger.error(f"Failed to upload audio to Drive: {e}")
