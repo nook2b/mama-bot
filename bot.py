@@ -176,6 +176,17 @@ def is_allowed(user_id: int) -> bool:
     return user_id in ALLOWED_USERS
 
 
+async def notify_vanya(context: ContextTypes.DEFAULT_TYPE, error_text: str):
+    """Отправляет Ване уведомление об ошибке в Telegram."""
+    try:
+        await context.bot.send_message(
+            chat_id=VANYA_CHAT_ID,
+            text=f"⚠️ Ошибка в боте:\n\n{error_text[:500]}",
+        )
+    except Exception:
+        logger.error(f"Failed to notify Vanya about error: {error_text}")
+
+
 def get_question_text(index: int) -> str:
     """Возвращает текст вопроса по индексу."""
     if 0 <= index < TOTAL_QUESTIONS:
@@ -437,10 +448,18 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = await transcribe_audio(voice_path)
     except Exception as e:
         logger.error(f"Transcription failed: {e}")
+        
+        # Аудио всё равно сохраняем — оно уже скачано
+        state["voice_parts"].append(voice_path)
+        state["text_parts"].append("[Транскрибация не удалась]")
+        state["last_activity"] = datetime.now(timezone.utc).isoformat()
+        save_state(state)
+        
         await update.message.reply_text(
-            "❌ Не удалось расшифровать. Попробуй записать ещё раз."
+            "Ой, что-то пошло не так с расшифровкой 😔 Но голосовое я сохранил! Не переживай, Ваня разберётся."
         )
-        os.remove(voice_path)
+        await notify_vanya(context, f"🔴 Ошибка транскрибации (вопрос {state['current_question'] + 1}):\n{e}\n\nАудио сохранено, но текст не расшифрован. Нужно разобраться!")
+        await send_continue_keyboard(context, update.effective_chat.id)
         return
 
     # Сохраняем в состояние
@@ -484,8 +503,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Save failed: {e}")
                 await context.bot.send_message(
                     chat_id=query.message.chat_id,
-                    text="⚠️ Не удалось сохранить на Диск, но ответ записан локально.",
+                    text="Ой, что-то пошло не так с сохранением 😔 Не переживай, я уже написал Ване — он разберётся!",
                 )
+                await notify_vanya(context, f"Ошибка сохранения на Google Диск (вопрос {state['current_question'] + 1}):\n{e}")
 
         # Переходим к следующему
         state["current_question"] += 1
@@ -609,6 +629,19 @@ def main():
     # Напоминания — проверяем каждый час
     job_queue = app.job_queue
     job_queue.run_repeating(check_reminder, interval=3600, first=60)
+
+    # Глобальный обработчик ошибок — уведомляет Ваню
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+        logger.error(f"Unhandled exception: {context.error}")
+        try:
+            await context.bot.send_message(
+                chat_id=VANYA_CHAT_ID,
+                text=f"🔴 Необработанная ошибка в боте:\n\n{str(context.error)[:500]}",
+            )
+        except Exception:
+            pass
+
+    app.add_error_handler(error_handler)
 
     logger.info("Bot started!")
     app.run_polling(drop_pending_updates=True)
