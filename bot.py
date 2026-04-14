@@ -245,46 +245,46 @@ async def transcribe_audio(file_path: str) -> str:
     return transcript.text
 
 
-async def save_answer(state: dict, question_idx: int):
-    """Сохраняет ответ (аудио + текст) на Google Диск."""
+async def upload_immediately(context: ContextTypes.DEFAULT_TYPE, state: dict, voice_path: str, text: str):
+    """Сразу загружает аудио и текст на Google Диск при получении."""
+    question_idx = state["current_question"]
     question_text = get_question_text(question_idx)
     safe_name = sanitize_filename(question_text)
     prefix = f"{question_idx + 1:03d}. {safe_name}"
 
-    # Объединяем все текстовые части
-    full_text = "\n\n".join(state["text_parts"])
+    part_num = len(state["voice_parts"])
+    part_suffix = f" (часть {part_num})" if part_num > 1 else ""
 
-    # Загружаем текст на Google Диск
-    text_filename = f"{prefix}"
+    # Загружаем аудио
+    audio_filename = f"{prefix}{part_suffix}.ogg"
+    try:
+        upload_to_drive(
+            file_path=voice_path,
+            filename=audio_filename,
+            mime_type="audio/ogg",
+            folder_id=GOOGLE_AUDIO_FOLDER_ID or None,
+        )
+    except Exception as e:
+        logger.error(f"Failed to upload audio to Drive: {e}")
+        await notify_vanya(context, f"Ошибка загрузки аудио на Диск (вопрос {question_idx + 1}):\n{e}")
+
+    # Загружаем текст
+    text_filename = f"{prefix}{part_suffix}"
     try:
         upload_text_to_drive(
-            text=f"Вопрос: {question_text}\n\nОтвет:\n{full_text}",
+            text=f"Вопрос: {question_text}\n\nОтвет:\n{text}",
             filename=text_filename,
             folder_id=GOOGLE_TEXT_FOLDER_ID or None,
         )
     except Exception as e:
         logger.error(f"Failed to upload text to Drive: {e}")
+        await notify_vanya(context, f"Ошибка загрузки текста на Диск (вопрос {question_idx + 1}):\n{e}")
 
-    # Загружаем аудио-части на Google Диск
-    for i, voice_path in enumerate(state["voice_parts"]):
-        part_suffix = f" (часть {i+1})" if len(state["voice_parts"]) > 1 else ""
-        audio_filename = f"{prefix}{part_suffix}.ogg"
-        try:
-            upload_to_drive(
-                file_path=voice_path,
-                filename=audio_filename,
-                mime_type="audio/ogg",
-                folder_id=GOOGLE_AUDIO_FOLDER_ID or None,
-            )
-        except Exception as e:
-            logger.error(f"Failed to upload audio to Drive: {e}")
-
-    # Удаляем временные файлы
-    for voice_path in state["voice_parts"]:
-        try:
-            os.remove(voice_path)
-        except OSError:
-            pass
+    # Удаляем временный файл — он уже на Диске
+    try:
+        os.remove(voice_path)
+    except OSError:
+        pass
 
 
 # ── Обработчики команд ──────────────────────────────────────────
@@ -449,11 +449,13 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Transcription failed: {e}")
         
-        # Аудио всё равно сохраняем — оно уже скачано
+        # Аудио всё равно сохраняем на Диск сразу
         state["voice_parts"].append(voice_path)
         state["text_parts"].append("[Транскрибация не удалась]")
         state["last_activity"] = datetime.now(timezone.utc).isoformat()
         save_state(state)
+        
+        await upload_immediately(context, state, voice_path, "[Транскрибация не удалась]")
         
         await update.message.reply_text(
             "Ой, что-то пошло не так с расшифровкой 😔 Но голосовое я сохранил! Не переживай, Ваня разберётся."
@@ -467,6 +469,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state["text_parts"].append(text)
     state["last_activity"] = datetime.now(timezone.utc).isoformat()
     save_state(state)
+
+    # Сразу загружаем аудио и текст на Google Диск
+    await upload_immediately(context, state, voice_path, text)
 
     # Показываем кнопки
     await update.message.reply_text("✅ Получено!")
@@ -489,23 +494,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Записывай, я слушаю! 🎤")
 
     elif query.data == "next":
-        # Сохраняем ответ и переходим к следующему вопросу
-        await query.edit_message_text("💾 Сохраняю...")
-
-        if state["voice_parts"]:
-            try:
-                await save_answer(state, state["current_question"])
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text="✅ Сохранено! Идём дальше ❤️",
-                )
-            except Exception as e:
-                logger.error(f"Save failed: {e}")
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text="Ой, что-то пошло не так с сохранением 😔 Не переживай, я уже написал Ване — он разберётся!",
-                )
-                await notify_vanya(context, f"Ошибка сохранения на Google Диск (вопрос {state['current_question'] + 1}):\n{e}")
+        # Всё уже сохранено на Диск — просто переходим к следующему вопросу
+        await query.edit_message_text("✅ Идём дальше ❤️")
 
         # Переходим к следующему
         state["current_question"] += 1
