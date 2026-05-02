@@ -423,11 +423,16 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     state = load_state()
 
-    if not state.get("waiting_for_voice"):
+    if not state.get("started"):
         await update.message.reply_text(
-            "Нажми /continue чтобы продолжить отвечать на вопросы."
+            "Напиши /start чтобы начать!"
         )
         return
+
+    # Автоматически включаем приём голосовых, если они были выключены
+    if not state.get("waiting_for_voice"):
+        state["waiting_for_voice"] = True
+        save_state(state)
 
     # Скачиваем голосовое
     voice = update.message.voice
