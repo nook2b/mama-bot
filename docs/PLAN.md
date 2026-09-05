@@ -829,7 +829,7 @@ export async function notifyVanya(env, text) {
 ## 15. Чек-лист перед стартом реализации
 
 - [x] ~~Прислать `questions.json`~~ — уже в репозитории, 222 строки, формат корректен
-- [ ] Подтвердить `MAMA_CHAT_ID` = `1219919762`, `VANYA_CHAT_ID` = `411340432`
+- [x] ~~Подтвердить `MAMA_CHAT_ID` = `1219919762`, `VANYA_CHAT_ID` = `411340432`~~ — подтверждено
 - [x] ~~Получить `GOOGLE_AUDIO_FOLDER_ID`, `GOOGLE_TEXT_FOLDER_ID`~~ — вписаны в `wrangler.json`
 - [x] ~~Google OAuth consent screen переведён в **Production**~~ — подтверждено
 - [x] ~~Решение по тарифу Workers (§3)~~ — стартуем на Free
