@@ -304,6 +304,30 @@ export function isAllowed(env, id) {
 ```
 **[ИСПРАВЛЕНО-2]** `Set` строится **внутри** функции, не на верхнем уровне модуля. `env` в Workers существует только внутри `fetch`/`scheduled` и того, что они вызывают — на верхнем уровне модуля его нет. Прежняя редакция (`const allowedIds = new Set([env.MAMA_CHAT_ID, ...])` вне функции) — это `ReferenceError: env is not defined` при первом же запросе, то есть бот не проходит даже холодный старт.
 
+`isAllowed` живёт в `pure.js` вместе с `sanitizeFilename` и `formatProgressBar` — все три без единого внешнего импорта (в том числе без `questions.json`), специально чтобы тесты §13 могли зависеть от одного маленького модуля и ничего больше:
+```js
+// pure.js
+export function isAllowed(env, id) { /* см. выше */ }
+
+export function sanitizeFilename(text, maxLength = 80) {
+  let safe = text.replaceAll('/', '-').replaceAll('\\', '-').replaceAll(':', '-')
+  safe = safe.replaceAll(/[?«»"*<>|]/g, '').replaceAll('\n', ' ').trim()
+  if (safe.length > maxLength) {
+    const cut = safe.slice(0, maxLength)
+    const lastSpace = cut.lastIndexOf(' ')
+    safe = lastSpace === -1 ? cut : cut.slice(0, lastSpace)
+  }
+  return safe
+}
+
+export function formatProgressBar(current, total) {
+  const pct = Math.round((current / total) * 100)
+  const filled = Math.round(pct / 5)
+  return { pct, bar: '█'.repeat(filled) + '░'.repeat(20 - filled) }
+}
+```
+`sanitizeFilename` — прямой порт `sanitize_filename` из `bot.py:162-171`, с той же семантикой обрезки по последнему пробелу (и тем же поведением на строке без пробелов в первых 80 символах — см. тест-кейс в §13). `formatProgressBar` берёт `total` параметром, а не глобальной константой, — ему всё равно, откуда взято число вопросов, поэтому он не зависит ни от `questions.js`, ни от D1.
+
 **И3. `partNum` — атомарный счётчик в D1, а не длина массива в JS.** **[ИСПРАВЛЕНО-2]**
 Первая редакция этого пункта требовала считать `partNum` после `push` в `voice_parts` (`voice_parts.push(...)` → `saveState` → `partNum = state.voice_parts.length`). Это действительно чинит порядок push/count, но не чинит гонку: два голосовых, обработанных двумя параллельными вызовами `processUpdate` (см. «Гонка за состоянием» в §7), делают `getState` → мутацию → `saveState` независимо друг от друга — при потере обновления оба получат один и тот же `partNum`, и на Диск лягут два файла с одинаковым именем без каких-либо признаков ошибки.
 Правильное решение — не читать-изменять-записывать в JS вообще, а получать номер части одним атомарным SQL-выражением, которое SQLite/D1 выполняет как единый шаг:
@@ -331,6 +355,7 @@ mama-bot/
 │   ├── bot-handler.js     # разбор апдейтов (команды, voice, callback_query)
 │   ├── state.js           # чтение/запись состояния в D1
 │   ├── questions.js       # загрузка вопросов, get/total
+│   ├── pure.js            # чистые функции без внешних зависимостей (см. §13)
 │   ├── whisper.js         # транскрибация через OpenAI
 │   ├── drive.js           # Google OAuth refresh + загрузка на Диск
 │   ├── reminders.js       # логика напоминаний (из scheduled)
@@ -375,7 +400,7 @@ Python-файлы (`bot.py`, `requirements.txt`, `Dockerfile`) при перек
   ]
 }
 ```
-`TOTAL_QUESTIONS` удалён намеренно — см. И4. `compatibility_flags` (в т.ч. `nodejs_compat`) не нужны: весь код — `fetch`/`FormData`/`Blob`/D1, без Node-специфичных API (кроме `node:fs` в §5, который в тестах бежит под настоящим Node, а не под воркером, и `nodejs_compat` не касается). Явно проговорено, чтобы никто не добавил флаг «на всякий случай» при первом же `wrangler deploy`.
+`TOTAL_QUESTIONS` удалён намеренно — см. И4. `compatibility_flags` (в т.ч. `nodejs_compat`) не нужны: весь код — `fetch`/`FormData`/`Blob`/D1, без единого Node-специфичного API. Явно проговорено, чтобы никто не добавил флаг «на всякий случай» при первом же `wrangler deploy`.
 
 ### Секреты (`wrangler secret put <name>`)
 | Секрет | Назначение |
@@ -387,8 +412,8 @@ Python-файлы (`bot.py`, `requirements.txt`, `Dockerfile`) при перек
 
 Секреты живут на стороне воркера и переживают редеплои через Workers Builds — задать их достаточно один раз.
 
-### Тариф
-**Заложиться на Workers Paid ($5/мес).** На free-плане очень маленький лимит CPU-времени на вызов. Ожидание `fetch` (Whisper, Drive) в CPU не считается, а вот сборка multipart-тела на несколько мегабайт — считается. Риск словить `Exceeded CPU limit` на длинных голосовых реален. Проверить лимиты актуального тарифа до продакшена.
+### Тариф **[ИЗМЕНЕНО]**
+**Стартуем на Workers Free**, переходим на Paid ($5/мес) по факту, если словим `Exceeded CPU limit`. Free-план считает **CPU-время**, а не время ожидания сети — `fetch` к Whisper/Drive/Telegram в этот бюджет не входит, входит только реально выполняющийся JS (парсинг небольших JSON-ответов, `sanitizeFilename`, сборка multipart-преамбулы в несколько сотен байт, D1-запросы). Для голосового такого объёма это, вероятно, единицы миллисекунд — должно укладываться в лимит free-плана (10 мс CPU на вызов), но это не гарантия, а ожидание: единственный способ проверить — попробовать на реальных длинных голосовых и посмотреть логи (`wrangler tail`) на `Exceeded CPU limit`. Если словим — переходим на Paid, это чистое изменение тарифа в дашборде, без правок кода.
 
 ## 4. Схема D1 (`schema.sql`)
 
@@ -456,12 +481,13 @@ saveGoogleToken(env, token)
 
 ## 5. `questions.js`
 ```js
-import { readFileSync } from 'node:fs'
-const questions = JSON.parse(readFileSync(new URL('../questions.json', import.meta.url)))
+import questions from '../questions.json'
 export const getQuestionText = (idx) => questions[idx] ?? null
 export const getTotalQuestions = () => questions.length   // 222
 ```
-**[ИСПРАВЛЕНО-2]** Первая редакция (`import questions from '../questions.json'`) собирается через esbuild внутри `wrangler dev`/`wrangler deploy` без проблем, но ломает тесты из §13: голый `node --test` без бандлера — это стандартный ESM-загрузчик Node, которому для JSON-импорта нужен import attribute (`with { type: 'json' }`), иначе `ERR_IMPORT_ATTRIBUTE_MISSING`. Вариант с `readFileSync` + `JSON.parse` работает одинаково и под Wrangler/esbuild, и под голым `node --test`, независимо от версии Node — не нужно привязываться к тому, поддерживает ли она синтаксис import attributes.
+Статический JSON-импорт остаётся как в первой редакции — Wrangler всегда прогоняет код через esbuild перед деплоем, и esbuild инлайнит `.json` на этапе сборки без рантайм-чтения файла.
+
+**[ИСПРАВЛЕНО-2, затем отменено]** Промежуточный вариант этого пункта предлагал заменить импорт на `readFileSync(new URL('../questions.json', import.meta.url))`, чтобы голый `node --test` (без бандлера) не спотыкался об отсутствие import attribute у JSON-импорта. Это была ошибка: в реальном воркере `node:fs` недоступен без флага `nodejs_compat`, который план сознательно не включает (см. §3) — то есть «починка» тестов сломала бы деплой. Реальное решение — не тянуть `questions.json` в тестируемый код вообще, см. `pure.js` ниже и §13.
 
 ## 6. `telegram.js`
 ```js
@@ -772,9 +798,9 @@ export async function notifyVanya(env, text) {
 
 В первой редакции тестирование было целиком ручным и на проде — то есть за реальные деньги на Whisper и с записью мусора на семейный Диск.
 
-Вынести чистые функции и покрыть их (`node --test`, без сети — этому не мешает импорт `questions.json` в §5, он теперь через `readFileSync`, а не статический ESM-импорт):
+Вынести чистые функции в `pure.js` (см. И2) и покрыть их (`node --test`, без сети, без бандлера): этот модуль **не импортирует `questions.json`** и вообще ничего — `test/pure.test.js` делает `import { sanitizeFilename, formatProgressBar, isAllowed } from '../src/pure.js'` напрямую, минуя `bot-handler.js`/`worker.js` (которые статически импортируют `questions.json` и потому под голым `node --test` без бандлера не запустятся — это ожидаемо, они и не тестируются напрямую).
 - `sanitizeFilename` — спецсимволы, обрезка по последнему пробелу на границе 80; **[ДОБАВЛЕНО-2]** отдельно — синтетическая строка без единого пробела в первых 80 символах: `rsplit(" ", 1)` в Python на строке без пробелов возвращает список из одного элемента (саму строку), то есть `sanitize_filename` в этом случае отдаёт ровно 80 символов без обрезки по слову. Реальных вопросов с таким свойством в `questions.json`, скорее всего, нет (максимальная длина вопроса — 117 символов, но это не то же самое, что «нет пробела в первых 80»), так что без синтетического теста эта ветка просто не будет покрыта;
-- расчёт прогресс-бара — 0%, 50%, 100%, длина всегда 20 символов;
+- `formatProgressBar` — 0%, 50%, 100%, длина `bar` всегда 20 символов, на произвольном `total`, не обязательно 222;
 - `isAllowed` — **число против строки** (И2), `undefined`, чужой ID.
 
 `part_seq` (И3) — атомарный SQL-инкремент, а не чистая функция, поэтому в `pure.test.js` не тестируется; проверяется вручную после деплоя (§16, «Ещё не всё» → второе голосовое).
