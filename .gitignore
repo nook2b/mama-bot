@@ -3,3 +3,7 @@ __pycache__/
 state.json
 tmp/
 .env
+
+node_modules/
+.wrangler/
+.dev.vars

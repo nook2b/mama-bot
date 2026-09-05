@@ -1,0 +1,22 @@
+{
+  "name": "mama-bot",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-09-05",
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
+  "vars": {
+    "MAMA_CHAT_ID": "1219919762",
+    "VANYA_CHAT_ID": "411340432",
+    "GOOGLE_AUDIO_FOLDER_ID": "1F9HXcBhOxLonmirqlRW0CNLI2qsiAfi3",
+    "GOOGLE_TEXT_FOLDER_ID": "1ZzWFBT4da2H9DqvHw2iMXnoTCOTpoxPD",
+    "REMINDER_INTERVAL_HOURS": "72"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mama-bot",
+      "database_id": "76a09bbc-52fa-421d-aae1-75f18048c359"
+    }
+  ]
+}
