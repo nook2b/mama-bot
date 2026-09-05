@@ -8,8 +8,8 @@
   "vars": {
     "MAMA_CHAT_ID": "1219919762",
     "VANYA_CHAT_ID": "411340432",
-    "GOOGLE_AUDIO_FOLDER_ID": "<folder_id>",
-    "GOOGLE_TEXT_FOLDER_ID": "<folder_id>",
+    "GOOGLE_AUDIO_FOLDER_ID": "1F9HXcBhOxLonmirqlRW0CNLI2qsiAfi3",
+    "GOOGLE_TEXT_FOLDER_ID": "1ZzWFBT4da2H9DqvHw2iMXnoTCOTpoxPD",
     "REMINDER_INTERVAL_HOURS": "72"
   },
   "d1_databases": [

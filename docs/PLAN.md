@@ -830,10 +830,10 @@ export async function notifyVanya(env, text) {
 
 - [x] ~~Прислать `questions.json`~~ — уже в репозитории, 222 строки, формат корректен
 - [ ] Подтвердить `MAMA_CHAT_ID` = `1219919762`, `VANYA_CHAT_ID` = `411340432`
-- [ ] Получить `GOOGLE_AUDIO_FOLDER_ID`, `GOOGLE_TEXT_FOLDER_ID`
-- [ ] Google OAuth consent screen переведён в **Production** (иначе `refresh_token` живёт 7 дней — Часть I §13)
-- [ ] Решение по тарифу Workers (§3)
-- [ ] Переименовать `gitignore` → `.gitignore`
+- [x] ~~Получить `GOOGLE_AUDIO_FOLDER_ID`, `GOOGLE_TEXT_FOLDER_ID`~~ — вписаны в `wrangler.json`
+- [x] ~~Google OAuth consent screen переведён в **Production**~~ — подтверждено
+- [x] ~~Решение по тарифу Workers (§3)~~ — стартуем на Free
+- [x] ~~Переименовать `gitignore` → `.gitignore`~~ — сделано
 
 ## 16. Тестирование после деплоя
 
