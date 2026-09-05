@@ -16,7 +16,7 @@
     {
       "binding": "DB",
       "database_name": "mama-bot",
-      "database_id": "<после wrangler d1 create mama-bot>"
+      "database_id": "76a09bbc-52fa-421d-aae1-75f18048c359"
     }
   ]
 }
