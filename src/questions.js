@@ -1,8 +1,9 @@
 // Статический JSON-импорт: esbuild (Wrangler всегда через него бандлит)
-// инлайнит questions.json на этапе сборки. Этот модуль сознательно НЕ
-// импортируется тестами (см. src/pure.js) — под голым node --test без
-// бандлера статический JSON-импорт без import attribute не заработает.
-import questions from '../questions.json'
+// инлайнит questions.json на этапе сборки. Атрибут `with { type: 'json' }`
+// нужен голому Node (node --test): без него импорт JSON падает с
+// ERR_IMPORT_ATTRIBUTE_MISSING, и модули, зависящие от вопросов, нельзя
+// было бы прогнать в тестах. esbuild атрибут понимает и просто инлайнит файл.
+import questions from '../questions.json' with { type: 'json' }
 
 export function getQuestionText(idx) {
   return questions[idx] ?? null

@@ -28,3 +28,12 @@ export function formatProgressBar(current, total) {
   const bar = '█'.repeat(filled) + '░'.repeat(20 - filled)
   return { pct, bar }
 }
+
+// callback_data кнопок: `action` или `action:arg` (напр. `next:41` — индекс
+// вопроса, для которого была показана клавиатура; см. handleCallback).
+export function parseCallbackData(data) {
+  if (typeof data !== 'string') return { action: '', arg: null }
+  const i = data.indexOf(':')
+  if (i === -1) return { action: data, arg: null }
+  return { action: data.slice(0, i), arg: data.slice(i + 1) }
+}
