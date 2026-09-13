@@ -3,8 +3,8 @@ import { getQuestionText, getTotalQuestions } from './questions.js'
 import { tgApi, getFile, getFileDownloadUrl, downloadFile } from './telegram.js'
 import { transcribe } from './whisper.js'
 import { uploadAudio, uploadDoc } from './drive.js'
-import { notifyVanya } from './admin.js'
-import { isAllowed, sanitizeFilename, formatProgressBar, parseCallbackData } from './pure.js'
+import { notifyVanya, sendToVanya } from './admin.js'
+import { isAllowed, sanitizeFilename, formatProgressBar, parseCallbackData, formatAnswerNotice } from './pure.js'
 
 // ── Вспомогательные отправки (docs/PLAN.md, Часть I §7) ────────────────
 
@@ -73,7 +73,10 @@ export async function handleCommand(env, message) {
 async function handleStart(env, chatId) {
   const { value: state } = await getState(env)
 
-  if (state.started && state.current_question > 0) {
+  // Любой повторный /start — «с возвращением», без пересоздания состояния:
+  // иначе /start до нажатия «Следующий вопрос» обнулял part_seq и следующая
+  // запись на тот же вопрос получала имя без «(часть N)». Часть I §15 п.4.
+  if (state.started) {
     await tgApi(env, 'sendMessage', {
       chat_id: chatId,
       text:
@@ -108,10 +111,11 @@ async function handleStart(env, chatId) {
 }
 
 async function handleContinue(env, chatId) {
+  // part_seq не сбрасываем: вопрос тот же, следующая запись — очередная
+  // «часть N», а не второй файл с именем первой. Часть I §15 п.1.
   const next = await mutateState(env, (s) => ({
     ...s,
     waiting_for_voice: true,
-    part_seq: 0,
     last_activity: Date.now(),
   }))
   await sendQuestion(env, chatId, next.current_question)
@@ -158,7 +162,7 @@ async function handleJump(env, chatId, args) {
     ...s,
     current_question: target - 1,
     waiting_for_voice: true,
-    part_seq: 0,
+    part_seq: s.current_question === target - 1 ? s.part_seq : 0, // счётчик частей живёт вместе с вопросом
     started: true,
     last_activity: Date.now(),
   }))
@@ -222,9 +226,11 @@ async function uploadImmediately(env, questionIndex, descriptor, arrayBuffer, te
   const partNum = await incrementPartSeq(env) // атомарно, см. И3
   const suffix = partNum > 1 ? ` (часть ${partNum})` : ''
   const ext = descriptor.ext
+  let audioId = null
+  let docId = null
 
   try {
-    await uploadAudio(
+    audioId = await uploadAudio(
       env,
       `${prefix}${suffix}.${ext}`,
       arrayBuffer,
@@ -245,7 +251,7 @@ async function uploadImmediately(env, questionIndex, descriptor, arrayBuffer, te
   }
 
   try {
-    await uploadDoc(
+    docId = await uploadDoc(
       env,
       `${prefix}${suffix}`,
       `Вопрос: ${questionText}\n\nОтвет:\n${text}`,
@@ -254,6 +260,26 @@ async function uploadImmediately(env, questionIndex, descriptor, arrayBuffer, te
   } catch (e) {
     await notifyVanya(env, `Ошибка загрузки текста на Диск (вопрос ${questionIndex + 1}):\n${e}`)
   }
+
+  return { partNum, audioId, docId }
+}
+
+// Уведомление Ване о каждом записанном ответе. Маме ничего не шлём.
+// Если голосовое прислал сам Ваня (проверка бота), уведомлять его же незачем.
+async function notifyVanyaAboutAnswer(env, message, questionIndex, uploadResult, text) {
+  if (String(message.from?.id) === String(env.VANYA_CHAT_ID)) return
+  await sendToVanya(
+    env,
+    formatAnswerNotice({
+      questionIndex,
+      total: getTotalQuestions(),
+      questionText: getQuestionText(questionIndex),
+      partNum: uploadResult.partNum,
+      text,
+      audioId: uploadResult.audioId,
+      docId: uploadResult.docId,
+    })
+  )
 }
 
 export async function handleVoice(env, message) {
@@ -311,9 +337,10 @@ export async function handleVoice(env, message) {
   }
 
   await mutateState(env, (s) => ({ ...s, waiting_for_voice: true, last_activity: Date.now() }))
-  await uploadImmediately(env, questionIndex, descriptor, arrayBuffer, text)
+  const uploadResult = await uploadImmediately(env, questionIndex, descriptor, arrayBuffer, text)
   await tgApi(env, 'sendMessage', { chat_id: message.chat.id, text: '✅ Получено!' })
   await sendContinueKeyboard(env, message.chat.id, questionIndex)
+  await notifyVanyaAboutAnswer(env, message, questionIndex, uploadResult, text)
 }
 
 // ── Кнопки (Часть I §8) ──────────────────────────────────────────────
