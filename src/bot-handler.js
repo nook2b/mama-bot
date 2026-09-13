@@ -266,7 +266,7 @@ async function uploadImmediately(env, questionIndex, descriptor, arrayBuffer, te
 
 // Уведомление Ване о каждом записанном ответе. Маме ничего не шлём.
 // Если голосовое прислал сам Ваня (проверка бота), уведомлять его же незачем.
-async function notifyVanyaAboutAnswer(env, message, questionIndex, uploadResult, text) {
+async function notifyVanyaAboutAnswer(env, message, questionIndex, uploadResult) {
   if (String(message.from?.id) === String(env.VANYA_CHAT_ID)) return
   await sendToVanya(
     env,
@@ -275,7 +275,6 @@ async function notifyVanyaAboutAnswer(env, message, questionIndex, uploadResult,
       total: getTotalQuestions(),
       questionText: getQuestionText(questionIndex),
       partNum: uploadResult.partNum,
-      text,
       audioId: uploadResult.audioId,
       docId: uploadResult.docId,
     })
@@ -340,7 +339,7 @@ export async function handleVoice(env, message) {
   const uploadResult = await uploadImmediately(env, questionIndex, descriptor, arrayBuffer, text)
   await tgApi(env, 'sendMessage', { chat_id: message.chat.id, text: '✅ Получено!' })
   await sendContinueKeyboard(env, message.chat.id, questionIndex)
-  await notifyVanyaAboutAnswer(env, message, questionIndex, uploadResult, text)
+  await notifyVanyaAboutAnswer(env, message, questionIndex, uploadResult)
 }
 
 // ── Кнопки (Часть I §8) ──────────────────────────────────────────────

@@ -38,14 +38,11 @@ export function parseCallbackData(data) {
   return { action: data.slice(0, i), arg: data.slice(i + 1) }
 }
 
-// Уведомление Ване о записанном ответе (см. handleVoice). Лимит Telegram на
-// текст сообщения — 4096 символов; длинную расшифровку обрезаем, ссылки на
-// Диск при этом остаются целыми.
-export function formatAnswerNotice({ questionIndex, total, questionText, partNum, text, audioId, docId }, maxTextLength = 3000) {
+// Уведомление Ване о записанном ответе (см. handleVoice). Саму расшифровку
+// не прикладываем — она по ссылке на документ.
+export function formatAnswerNotice({ questionIndex, total, questionText, partNum, audioId, docId }) {
   const part = partNum > 1 ? ` (часть ${partNum})` : ''
-  const lines = [`🎙 Мама ответила на вопрос ${questionIndex + 1} из ${total}${part}`, '', `❓ ${questionText}`, '']
-  const body = text.length > maxTextLength ? text.slice(0, maxTextLength) + '…' : text
-  lines.push(`📝 ${body}`)
+  const lines = [`🎙 Мама ответила на вопрос ${questionIndex + 1} из ${total}${part}`, '', `❓ ${questionText}`]
   const links = []
   if (audioId) links.push(`🔊 Аудио: https://drive.google.com/file/d/${audioId}/view`)
   if (docId) links.push(`📄 Текст: https://docs.google.com/document/d/${docId}/edit`)

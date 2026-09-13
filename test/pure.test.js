@@ -86,23 +86,18 @@ test('parseCallbackData: мусор вместо строки', () => {
   assert.deepEqual(parseCallbackData(undefined), { action: '', arg: null })
 })
 
-test('formatAnswerNotice: часть, ссылки и текст', () => {
+test('formatAnswerNotice: часть и ссылки, без расшифровки', () => {
   const msg = formatAnswerNotice({
-    questionIndex: 4, total: 222, questionText: 'Кем ты мечтала стать?', partNum: 2,
-    text: 'Врачом.', audioId: 'A1', docId: 'D1',
+    questionIndex: 4, total: 222, questionText: 'Кем ты мечтала стать?', partNum: 2, audioId: 'A1', docId: 'D1',
   })
   assert.equal(
     msg,
-    '🎙 Мама ответила на вопрос 5 из 222 (часть 2)\n\n❓ Кем ты мечтала стать?\n\n📝 Врачом.\n\n' +
+    '🎙 Мама ответила на вопрос 5 из 222 (часть 2)\n\n❓ Кем ты мечтала стать?\n\n' +
       '🔊 Аудио: https://drive.google.com/file/d/A1/view\n📄 Текст: https://docs.google.com/document/d/D1/edit'
   )
 })
 
-test('formatAnswerNotice: без части и без ссылок, длинный текст обрезается', () => {
-  const msg = formatAnswerNotice(
-    { questionIndex: 0, total: 222, questionText: 'В?', partNum: 1, text: 'х'.repeat(50), audioId: null, docId: null },
-    10
-  )
-  assert.equal(msg, '🎙 Мама ответила на вопрос 1 из 222\n\n❓ В?\n\n📝 ' + 'х'.repeat(10) + '…')
-  assert.ok(msg.length < 4096)
+test('formatAnswerNotice: первая часть без ссылок (оба аплоада упали)', () => {
+  const msg = formatAnswerNotice({ questionIndex: 0, total: 222, questionText: 'В?', partNum: 1, audioId: null, docId: null })
+  assert.equal(msg, '🎙 Мама ответила на вопрос 1 из 222\n\n❓ В?')
 })
