@@ -81,3 +81,7 @@
 ```
 npm test
 ```
+
+## Лицензия
+
+[MIT](LICENSE)
