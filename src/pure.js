@@ -28,3 +28,24 @@ export function formatProgressBar(current, total) {
   const bar = '█'.repeat(filled) + '░'.repeat(20 - filled)
   return { pct, bar }
 }
+
+// callback_data кнопок: `action` или `action:arg` (напр. `next:41` — индекс
+// вопроса, для которого была показана клавиатура; см. handleCallback).
+export function parseCallbackData(data) {
+  if (typeof data !== 'string') return { action: '', arg: null }
+  const i = data.indexOf(':')
+  if (i === -1) return { action: data, arg: null }
+  return { action: data.slice(0, i), arg: data.slice(i + 1) }
+}
+
+// Уведомление Ване о записанном ответе (см. handleVoice). Саму расшифровку
+// не прикладываем — она по ссылке на документ.
+export function formatAnswerNotice({ questionIndex, total, questionText, partNum, audioId, docId }) {
+  const part = partNum > 1 ? ` (часть ${partNum})` : ''
+  const lines = [`🎙 Мама ответила на вопрос ${questionIndex + 1} из ${total}${part}`, '', `❓ ${questionText}`]
+  const links = []
+  if (audioId) links.push(`🔊 Аудио: https://drive.google.com/file/d/${audioId}/view`)
+  if (docId) links.push(`📄 Текст: https://docs.google.com/document/d/${docId}/edit`)
+  if (links.length) lines.push('', ...links)
+  return lines.join('\n')
+}

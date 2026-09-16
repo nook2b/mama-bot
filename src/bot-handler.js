@@ -3,8 +3,8 @@ import { getQuestionText, getTotalQuestions } from './questions.js'
 import { tgApi, getFile, getFileDownloadUrl, downloadFile } from './telegram.js'
 import { transcribe } from './whisper.js'
 import { uploadAudio, uploadDoc } from './drive.js'
-import { notifyVanya } from './admin.js'
-import { isAllowed, sanitizeFilename, formatProgressBar } from './pure.js'
+import { notifyVanya, sendToVanya } from './admin.js'
+import { isAllowed, sanitizeFilename, formatProgressBar, parseCallbackData, formatAnswerNotice } from './pure.js'
 
 // ── Вспомогательные отправки (docs/PLAN.md, Часть I §7) ────────────────
 
@@ -28,7 +28,11 @@ export async function sendQuestion(env, chatId, idx) {
   })
 }
 
-async function sendContinueKeyboard(env, chatId) {
+// В callback_data кнопки «Следующий вопрос» зашит индекс вопроса, для
+// которого показана клавиатура. Если мама прислала два голосовых подряд,
+// на экране две клавиатуры; без индекса второе нажатие «Следующий вопрос»
+// продвинуло бы прогресс ещё раз и вопрос остался бы без ответа.
+async function sendContinueKeyboard(env, chatId, questionIndex) {
   await tgApi(env, 'sendMessage', {
     chat_id: chatId,
     text: 'Хочешь добавить ещё что-то к этому ответу?',
@@ -36,7 +40,7 @@ async function sendContinueKeyboard(env, chatId) {
       inline_keyboard: [
         [
           { text: '🎤 Ещё не всё', callback_data: 'more' },
-          { text: '➡️ Следующий вопрос', callback_data: 'next' },
+          { text: '➡️ Следующий вопрос', callback_data: `next:${questionIndex}` },
         ],
       ],
     },
@@ -69,7 +73,10 @@ export async function handleCommand(env, message) {
 async function handleStart(env, chatId) {
   const { value: state } = await getState(env)
 
-  if (state.started && state.current_question > 0) {
+  // Любой повторный /start — «с возвращением», без пересоздания состояния:
+  // иначе /start до нажатия «Следующий вопрос» обнулял part_seq и следующая
+  // запись на тот же вопрос получала имя без «(часть N)». Часть I §15 п.4.
+  if (state.started) {
     await tgApi(env, 'sendMessage', {
       chat_id: chatId,
       text:
@@ -104,10 +111,11 @@ async function handleStart(env, chatId) {
 }
 
 async function handleContinue(env, chatId) {
+  // part_seq не сбрасываем: вопрос тот же, следующая запись — очередная
+  // «часть N», а не второй файл с именем первой. Часть I §15 п.1.
   const next = await mutateState(env, (s) => ({
     ...s,
     waiting_for_voice: true,
-    part_seq: 0,
     last_activity: Date.now(),
   }))
   await sendQuestion(env, chatId, next.current_question)
@@ -154,7 +162,7 @@ async function handleJump(env, chatId, args) {
     ...s,
     current_question: target - 1,
     waiting_for_voice: true,
-    part_seq: 0,
+    part_seq: s.current_question === target - 1 ? s.part_seq : 0, // счётчик частей живёт вместе с вопросом
     started: true,
     last_activity: Date.now(),
   }))
@@ -197,17 +205,18 @@ export async function handleOther(env, message) {
 function resolveAudioDescriptor(message, tgFile) {
   const ext = tgFile.file_path.split('.').pop()
   if (message.voice) {
-    return { fileId: message.voice.file_id, mimeType: 'audio/ogg', fileName: `voice.${ext}` }
+    return { fileId: message.voice.file_id, mimeType: 'audio/ogg', fileName: `voice.${ext}`, ext }
   }
   if (message.audio) {
     return {
       fileId: message.audio.file_id,
       mimeType: message.audio.mime_type || `audio/${ext}`,
       fileName: message.audio.file_name || `audio.${ext}`,
+      ext, // не из file_name — он может быть без расширения («Запись 3»)
     }
   }
   // video_note — всегда mp4, у Telegram нет mime_type в самом объекте
-  return { fileId: message.video_note.file_id, mimeType: 'video/mp4', fileName: `video_note.${ext}` }
+  return { fileId: message.video_note.file_id, mimeType: 'video/mp4', fileName: `video_note.${ext}`, ext }
 }
 
 async function uploadImmediately(env, questionIndex, descriptor, arrayBuffer, text) {
@@ -216,10 +225,12 @@ async function uploadImmediately(env, questionIndex, descriptor, arrayBuffer, te
   const prefix = `${String(questionIndex + 1).padStart(3, '0')}. ${safe}`
   const partNum = await incrementPartSeq(env) // атомарно, см. И3
   const suffix = partNum > 1 ? ` (часть ${partNum})` : ''
-  const ext = descriptor.fileName.split('.').pop()
+  const ext = descriptor.ext
+  let audioId = null
+  let docId = null
 
   try {
-    await uploadAudio(
+    audioId = await uploadAudio(
       env,
       `${prefix}${suffix}.${ext}`,
       arrayBuffer,
@@ -240,7 +251,7 @@ async function uploadImmediately(env, questionIndex, descriptor, arrayBuffer, te
   }
 
   try {
-    await uploadDoc(
+    docId = await uploadDoc(
       env,
       `${prefix}${suffix}`,
       `Вопрос: ${questionText}\n\nОтвет:\n${text}`,
@@ -249,6 +260,25 @@ async function uploadImmediately(env, questionIndex, descriptor, arrayBuffer, te
   } catch (e) {
     await notifyVanya(env, `Ошибка загрузки текста на Диск (вопрос ${questionIndex + 1}):\n${e}`)
   }
+
+  return { partNum, audioId, docId }
+}
+
+// Уведомление Ване о каждом записанном ответе. Маме ничего не шлём.
+// Если голосовое прислал сам Ваня (проверка бота), уведомлять его же незачем.
+async function notifyVanyaAboutAnswer(env, message, questionIndex, uploadResult) {
+  if (String(message.from?.id) === String(env.VANYA_CHAT_ID)) return
+  await sendToVanya(
+    env,
+    formatAnswerNotice({
+      questionIndex,
+      total: getTotalQuestions(),
+      questionText: getQuestionText(questionIndex),
+      partNum: uploadResult.partNum,
+      audioId: uploadResult.audioId,
+      docId: uploadResult.docId,
+    })
+  )
 }
 
 export async function handleVoice(env, message) {
@@ -265,13 +295,26 @@ export async function handleVoice(env, message) {
   }
 
   const fileId = message.voice?.file_id ?? message.audio?.file_id ?? message.video_note?.file_id
-  const tgFile = await getFile(env, fileId)
-  const descriptor = resolveAudioDescriptor(message, tgFile)
-  const arrayBuffer = await downloadFile(getFileDownloadUrl(env, tgFile.file_path))
+  const questionIndex = state.current_question
+
+  // getFile отдаёт не больше 20 МБ (лимит Bot API) — длинный аудиофайл
+  // или обрыв скачивания раньше уходили в глобальный catch: Ване ошибка,
+  // маме — тишина. Теперь маме понятная просьба повторить.
+  let descriptor, arrayBuffer
+  try {
+    const tgFile = await getFile(env, fileId)
+    descriptor = resolveAudioDescriptor(message, tgFile)
+    arrayBuffer = await downloadFile(getFileDownloadUrl(env, tgFile.file_path))
+  } catch (e) {
+    await tgApi(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: 'Ой, не получилось скачать запись 😔 Попробуй, пожалуйста, отправить её ещё раз — можно частями покороче.',
+    })
+    await notifyVanya(env, `🔴 Не удалось скачать файл из Telegram (вопрос ${questionIndex + 1}):\n${e}`)
+    return
+  }
 
   await tgApi(env, 'sendMessage', { chat_id: message.chat.id, text: '⏳ Расшифровываю...' })
-
-  const questionIndex = state.current_question
 
   let text
   try {
@@ -288,14 +331,15 @@ export async function handleVoice(env, message) {
       `🔴 Ошибка транскрибации (вопрос ${questionIndex + 1}):\n${e}\n\n` +
         'Аудио сохранено, но текст не расшифрован. Нужно разобраться!'
     )
-    await sendContinueKeyboard(env, message.chat.id)
+    await sendContinueKeyboard(env, message.chat.id, questionIndex)
     return
   }
 
   await mutateState(env, (s) => ({ ...s, waiting_for_voice: true, last_activity: Date.now() }))
-  await uploadImmediately(env, questionIndex, descriptor, arrayBuffer, text)
+  const uploadResult = await uploadImmediately(env, questionIndex, descriptor, arrayBuffer, text)
   await tgApi(env, 'sendMessage', { chat_id: message.chat.id, text: '✅ Получено!' })
-  await sendContinueKeyboard(env, message.chat.id)
+  await sendContinueKeyboard(env, message.chat.id, questionIndex)
+  await notifyVanyaAboutAnswer(env, message, questionIndex, uploadResult)
 }
 
 // ── Кнопки (Часть I §8) ──────────────────────────────────────────────
@@ -308,23 +352,56 @@ export async function handleCallback(env, callbackQuery) {
 
   const chatId = callbackQuery.message.chat.id
   const messageId = callbackQuery.message.message_id
-  const edit = (text) => tgApi(env, 'editMessageText', { chat_id: chatId, message_id: messageId, text })
 
-  switch (callbackQuery.data) {
+  // Двойной тап по кнопке приходит двумя callback_query с разными update_id,
+  // так что идемпотентность в worker.js его не ловит. Первый тап убирает
+  // клавиатуру и меняет текст; второй пытается записать тот же текст, и
+  // Telegram отвечает «message is not modified». Считаем это признаком
+  // повтора: возвращаем false, а не роняем обработчик с тревогой Ване.
+  const edit = async (text) => {
+    try {
+      await tgApi(env, 'editMessageText', { chat_id: chatId, message_id: messageId, text })
+      return true
+    } catch (e) {
+      if (String(e).includes('message is not modified')) return false
+      throw e
+    }
+  }
+
+  const { action, arg } = parseCallbackData(callbackQuery.data)
+
+  switch (action) {
     case 'more':
       await edit('Записывай, я слушаю! 🎤')
       return
 
     case 'next': {
-      await edit('✅ Идём дальше ❤️')
-      const next = await mutateState(env, (s) => ({
-        ...s,
-        current_question: s.current_question + 1,
-        part_seq: 0,
-        waiting_for_voice: true,
-        last_activity: Date.now(),
-      }))
-      await sendQuestion(env, chatId, next.current_question)
+      // arg — индекс вопроса, для которого была показана клавиатура (см.
+      // sendContinueKeyboard). Старые кнопки без индекса (arg === null)
+      // работают как раньше.
+      const shownFor = arg === null ? null : Number(arg)
+      const { value: current } = await getState(env)
+      if (shownFor !== null && shownFor !== current.current_question) {
+        await edit('✅ Этот вопрос уже пройден')
+        return
+      }
+      if (!(await edit('✅ Идём дальше ❤️'))) return // повторное нажатие
+      let advanced = false
+      const next = await mutateState(env, (s) => {
+        if (shownFor !== null && s.current_question !== shownFor) {
+          advanced = false
+          return s // кто-то успел продвинуть прогресс между getState и записью
+        }
+        advanced = true
+        return {
+          ...s,
+          current_question: s.current_question + 1,
+          part_seq: 0,
+          waiting_for_voice: true,
+          last_activity: Date.now(),
+        }
+      })
+      if (advanced) await sendQuestion(env, chatId, next.current_question)
       return
     }
 
@@ -345,8 +422,8 @@ export async function handleCallback(env, callbackQuery) {
       return
 
     case 'reminder_continue': {
+      if (!(await edit('Отлично! Продолжаем! 🚀'))) return // повторное нажатие — вопрос уже отправлен
       const next = await mutateState(env, (s) => ({ ...s, waiting_for_voice: true, last_activity: Date.now() }))
-      await edit('Отлично! Продолжаем! 🚀')
       await sendQuestion(env, chatId, next.current_question)
       return
     }

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isAllowed, sanitizeFilename, formatProgressBar } from '../src/pure.js'
+import { isAllowed, sanitizeFilename, formatProgressBar, parseCallbackData, formatAnswerNotice } from '../src/pure.js'
 
 test('sanitizeFilename: / \\ : заменяются на -', () => {
   assert.equal(sanitizeFilename('до/после\\потом:сейчас'), 'до-после-потом-сейчас')
@@ -70,4 +70,34 @@ test('isAllowed: undefined/null ID', () => {
   const env = { MAMA_CHAT_ID: '1219919762', VANYA_CHAT_ID: '411340432' }
   assert.equal(isAllowed(env, undefined), false)
   assert.equal(isAllowed(env, null), false)
+})
+
+test('parseCallbackData: без аргумента', () => {
+  assert.deepEqual(parseCallbackData('more'), { action: 'more', arg: null })
+  assert.deepEqual(parseCallbackData('next'), { action: 'next', arg: null })
+})
+
+test('parseCallbackData: с индексом вопроса', () => {
+  assert.deepEqual(parseCallbackData('next:41'), { action: 'next', arg: '41' })
+  assert.deepEqual(parseCallbackData('next:0'), { action: 'next', arg: '0' })
+})
+
+test('parseCallbackData: мусор вместо строки', () => {
+  assert.deepEqual(parseCallbackData(undefined), { action: '', arg: null })
+})
+
+test('formatAnswerNotice: часть и ссылки, без расшифровки', () => {
+  const msg = formatAnswerNotice({
+    questionIndex: 4, total: 222, questionText: 'Кем ты мечтала стать?', partNum: 2, audioId: 'A1', docId: 'D1',
+  })
+  assert.equal(
+    msg,
+    '🎙 Мама ответила на вопрос 5 из 222 (часть 2)\n\n❓ Кем ты мечтала стать?\n\n' +
+      '🔊 Аудио: https://drive.google.com/file/d/A1/view\n📄 Текст: https://docs.google.com/document/d/D1/edit'
+  )
+})
+
+test('formatAnswerNotice: первая часть без ссылок (оба аплоада упали)', () => {
+  const msg = formatAnswerNotice({ questionIndex: 0, total: 222, questionText: 'В?', partNum: 1, audioId: null, docId: null })
+  assert.equal(msg, '🎙 Мама ответила на вопрос 1 из 222\n\n❓ В?')
 })

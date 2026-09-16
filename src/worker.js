@@ -13,7 +13,23 @@ export default {
   },
   async scheduled(event, env, ctx) {
     ctx.waitUntil(checkReminder(env))
+    ctx.waitUntil(pruneSeenUpdates(env))
   },
+}
+
+// seen_updates растёт с каждым апдейтом; Telegram ретраит вебхук не дольше
+// суток, так что строки старше недели для идемпотентности уже не нужны.
+// Чистим тем же часовым кроном, что и напоминания. См. docs/PLAN.md §7.
+const SEEN_UPDATES_TTL_MS = 7 * 24 * 3_600_000
+
+export async function pruneSeenUpdates(env) {
+  try {
+    await env.DB.prepare('DELETE FROM seen_updates WHERE seen_at < ?')
+      .bind(Date.now() - SEEN_UPDATES_TTL_MS)
+      .run()
+  } catch (e) {
+    console.error('pruneSeenUpdates failed:', e)
+  }
 }
 
 export async function handleBotWebhook(request, env, ctx) {

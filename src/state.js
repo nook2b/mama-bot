@@ -47,12 +47,13 @@ export async function mutateState(env, mutator, retries = 3) {
 export async function incrementPartSeq(env) {
   const row = await env.DB.prepare(
     `UPDATE kv
-     SET value = json_set(value, '$.part_seq', json_extract(value, '$.part_seq') + 1),
+     SET value = json_set(value, '$.part_seq', COALESCE(json_extract(value, '$.part_seq'), 0) + 1),
          version = version + 1,
          updated_at = ?
      WHERE key = 'state'
      RETURNING json_extract(value, '$.part_seq') AS part_seq`
   ).bind(Date.now()).first()
+  if (!row) throw new Error('incrementPartSeq: строка state ещё не создана — сначала mutateState()')
   return row.part_seq
 }
 
